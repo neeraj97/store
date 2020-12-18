@@ -1,5 +1,11 @@
 # ChangeLog
 
+## 0.7.9
+
+* Attempts to fix build on ghc-7.8.4. See [#157].
+
+[#157]: https://github.com/mgsloan/store/issues/157
+
 ## 0.7.8
 
 * Adds a `Store` instance for `Natural`. See [#154][].
