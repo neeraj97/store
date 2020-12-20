@@ -16,3 +16,5 @@ cabal.sandbox.config
 .stack-work/
 *.cabal
 *.yaml.lock
+
+stack-9.0.1.yaml
