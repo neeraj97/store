@@ -1,5 +1,12 @@
 # ChangeLog
 
+## 0.7.10
+
+* Adds `Store` instances for all serializable datatypes exported by
+  the `time` library. See [#158].
+
+[#158]: https://github.com/mgsloan/store/issues/158
+
 ## 0.7.9
 
 * Attempts to fix build on ghc-7.8.4. See [#157].
