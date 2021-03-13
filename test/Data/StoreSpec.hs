@@ -65,7 +65,7 @@ import           Language.Haskell.TH.Syntax
 import           Network.Socket
 import           Numeric.Natural (Natural)
 import           Prelude
-import           System.Clock (TimeSpec)
+import           System.Clock (TimeSpec(..))
 import           System.Posix.Types
 import           Test.Hspec hiding (runIO)
 import           Test.SmallCheck.Series
@@ -257,6 +257,9 @@ instance (Monad m, Serial m a) => Serial m (NE.NonEmpty a)
 instance Monad m => Serial m Void where
     series = generate (\_ -> [])
 #endif
+
+instance Monad m => Serial m TimeSpec where
+    series = uncurry TimeSpec <$> (series >< series)
 
 -- We define our own Serial instance for 'Ratio' because of <https://github.com/feuerbach/smallcheck/pull/34>
 
