@@ -737,15 +737,6 @@ instance Store Natural where
           then peekException "Encountered negative integer when expecting a Natural"
           else return $ fromIntegral x
 
--- instance Store GHC.Fingerprint.Types.Fingerprint where
-
-instance Store (Fixed a) where
-    size = contramap (\(MkFixed x) -> x) (size :: Size Integer)
-    poke (MkFixed x) = poke x
-    peek = MkFixed <$> peek
-
--- instance Store a => Store (Tree a) where
-
 ------------------------------------------------------------------------
 -- Other instances
 
@@ -798,6 +789,8 @@ $($(derive [d|
     instance Deriving (Store Void)
     instance Deriving (Store Bool)
     instance (Store a, Store b) => Deriving (Store (Either a b))
+
+    instance Deriving (Store (Fixed a))
 
     instance Deriving (Store Time.AbsoluteTime)
     instance Deriving (Store Time.Day)
