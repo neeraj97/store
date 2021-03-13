@@ -34,7 +34,7 @@ matrix:
     compiler: "stack + GHC-8.2"
 
   - env: BUILD=stack ARGS="--stack-yaml stack.yaml"
-    compiler: "stack + GHC-8.6"
+    compiler: "stack + GHC-8.8"
 
 before_install:
 # Using compiler above sets CC to an invalid value, so unset it
