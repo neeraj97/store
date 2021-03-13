@@ -4,7 +4,7 @@ synopsis: Fast binary serialization
 maintainer: Michael Sloan <mgsloan@gmail.com>
 license: MIT
 copyright: 2016 FP Complete
-github: fpco/store
+github: mgsloan/store
 category: Serialization, Data
 extra-source-files:
   - ChangeLog.md
