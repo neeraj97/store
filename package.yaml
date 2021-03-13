@@ -44,9 +44,7 @@ dependencies:
   # Due to behavior change for reification errors
   - th-reify-many >=0.1.6
 
-# "Just cuz" constraints. These are the package versions we use in the 7.8
-# config. Many of these bounds can be much lower, most aren't even necessary.
-# Added to appease at least the lower part of the PvP
+  # Lower bounds based on 7.8 config.
   - array >=0.5.0.0
   - base-orphans >=0.4.3
   - base64-bytestring >= 0.1.1
