@@ -64,7 +64,6 @@ instance NFData TypeHash
 instance Lift TypeHash where
     lift = staticByteStringExp . unStaticSize . unTypeHash
 
--- TODO: move into th-reify-many
 reifyManyTyDecls :: ((Name, Info) -> Q (Bool, [Name]))
                  -> [Name]
                  -> Q [(Name, Info)]

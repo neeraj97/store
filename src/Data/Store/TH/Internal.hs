@@ -195,18 +195,6 @@ deriveStore preds headTy cons0 =
     pokeTag ix = noBindS [| poke (ix :: $(conT tagType)) |]
     pokeField (fn, _) = noBindS [| poke $(varE fn) |]
 
--- FIXME: make this work even when there are too many fields
-
--- FIXME: make the ConstSize stuff explicit in the API. Have an option
--- that always errors at runtime if it isn't ConstSize?
-
--- TODO: It would be really awesome, though a bit tricky, to know at
--- compile time if we have a static size.
-
--- TODO: make sure that this tends to optimize even with tons of fields.
--- It should also optimize when some fields are known to be , but others
--- are unknown (determined by polymorphic var)
-
 {- What the generated code looks like
 
 data Foo = Foo Int Double Float

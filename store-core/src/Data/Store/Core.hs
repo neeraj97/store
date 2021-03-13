@@ -441,7 +441,6 @@ decodeIOPortionWithFromPtr mypeek ptr len =
 #else
               runPeek mypeek (PeekState end) ptr
 #endif
-        -- TODO: consider moving this condition to before running the peek?
           if len > remaining -- Do not perform the check on the new pointer, since it could have overflowed
               then throwIO $ PeekException (end `minusPtr` ptr2) "Overshot end of buffer"
               else return (ptr2 `minusPtr` ptr, x')
@@ -477,8 +476,6 @@ pokeStorable x = Poke $ \ps offset -> do
     let !newOffset = offset + sizeOf x
     return (newOffset, ())
 {-# INLINE pokeStorable #-}
-
--- FIXME: make it the responsibility of the caller to check this.
 
 -- | A 'peek' implementation based on an instance of 'Storable' and
 -- 'Typeable'.
@@ -560,8 +557,6 @@ pokeFromPtr sourcePtr sourceOffset len =
                   len
         let !newOffset = targetOffset + len
         return (newOffset, ())
-
--- TODO: have a safer variant with the check?
 
 -- | Copy a section of memory, based on a 'ByteArray#', to the output.
 -- Note that this operation is unsafe, because the offset and length

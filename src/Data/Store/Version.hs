@@ -105,7 +105,6 @@ impl wf vc = do
         Nothing -> return ()
         Just expectedHash -> do
             let shownType = showsQualTypeRep (vcRenames vc) 0 (typeRep proxy) ""
-            -- FIXME: sanitize expected and handle null
             path <- storeVersionedPath expectedHash
             if hashb64 == expectedHash
                 then writeVersionInfo path shownType info

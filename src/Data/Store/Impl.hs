@@ -39,8 +39,6 @@ import           System.IO.Unsafe (unsafePerformIO)
 ------------------------------------------------------------------------
 -- Store class
 
--- TODO: write down more elaborate laws
-
 -- | The 'Store' typeclass provides efficient serialization and
 -- deserialization to raw pointer addresses.
 --
@@ -261,9 +259,6 @@ instance (GStorePeek a, GStorePeek b) => GStorePeek (a :*: b) where
     {-# INLINE gpeek #-}
 
 -- The machinery for sum types is why UndecidableInstances is necessary.
-
--- FIXME: check that this type level stuff dosen't get turned into
--- costly runtime computation
 
 instance (FitsInByte (SumArity (a :+: b)), GStoreSizeSum 0 (a :+: b))
          => GStoreSize (a :+: b) where

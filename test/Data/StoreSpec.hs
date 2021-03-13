@@ -79,9 +79,6 @@ import           Data.Void (Void)
 ------------------------------------------------------------------------
 -- Instances for base types
 
--- TODO: should be possible to do something clever where it only defines
--- instances that don't already exist.  For now, just doing it manually.
-
 addMinAndMaxBounds :: forall a. (Bounded a, Eq a) => [a] -> [a]
 addMinAndMaxBounds xs =
     (if (minBound :: a) `notElem` xs then [minBound] else []) ++
@@ -157,32 +154,6 @@ $(do tys <- getAllInstanceTypes1 ''PV.Prim
      let f ty = [d| instance (Serial m $(return ty), Monad m) => Serial m (PV.Vector $(return ty)) where
                       series = fmap PV.fromList series |]
      concat <$> mapM f (filter (\ty -> length (unAppsT ty) == 1) tys))
-
-{-
--- Instances for TH are not currently needed, because the tests for
--- serialization roundtripping are disabled due to Bytes' Eq instance,
--- see issue #150.
-
--- Needs to be done manually because in GHC 7.8's TH, NameFlavour uses
--- unboxed values and cannot use generic deriving. So we skip having an
--- instance for it.
-instance Monad m => Serial m Name where series = fmap mkName series
-
-instance Monad m => Serial m Bytes where
-  series = fmap ((\(BS.PS p o l) -> Bytes p (fromIntegral o) (fromIntegral l)) . BS.pack) series
-
--- Serial instances for (Generic a) types.
-
--- FIXME: generating for TH instances is probably just adding
--- unnecessary compiletime + runtime overhead.
-$(do thNames <- reifyManyWithoutInstances
-         ''Serial
-         [''Info, ''Loc, ''ModName, ''PkgName, ''NameSpace, ''OccName]
-         (`notElem` [''NameFlavour])
-     let ns = [ ''Any, ''All ] ++ thNames
-         f n = [d| instance Monad m => Serial m $(conT n) |]
-     concat <$> mapM f ns)
--}
 
 $(do let ns = [ ''Dual, ''Sum, ''Product, ''First, ''Last ]
          f n = [d| instance (Monad m, Serial m a) => Serial m ($(conT n) a) |]

@@ -24,7 +24,6 @@ import qualified Data.Vector.Storable as SV
 import           Data.Word
 import           GHC.Generics
 
--- TODO: add packer
 #if COMPARISON_BENCH
 import qualified Data.Binary as Binary
 import qualified Data.Serialize as Cereal
@@ -160,8 +159,6 @@ benchEncode' msg x0 =
 benchDecode :: Ctx a => a -> Benchmark
 benchDecode = benchDecode' ""
 
--- TODO: comparison bench for decode
-
 benchDecode' :: forall a. Ctx a => String -> a -> Benchmark
 #if COMPARISON_BENCH
 benchDecode' prefix x0 =
@@ -234,8 +231,6 @@ instance Store SmallSumManual where
     poke (SSM2 x) = poke (1 :: Word8) >> poke x
     poke (SSM3 x) = poke (2 :: Word8) >> poke x
     poke (SSM4 x) = poke (3 :: Word8) >> poke x
-
--- TODO: add TH generation of the above, and add LargeSum / LargeProduct cases
 
 #if COMPARISON_BENCH
 instance Binary.Binary SmallProduct
