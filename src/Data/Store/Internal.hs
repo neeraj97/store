@@ -121,13 +121,6 @@ import           Foreign.C.Types ()
 import           Foreign.Ptr (plusPtr, minusPtr)
 import           Foreign.Storable (Storable, sizeOf)
 import           GHC.Generics (Generic)
-#ifdef INTEGER_GMP
-import qualified GHC.Integer.GMP.Internals as I
-import           GHC.Types (Int (I#))
-#else
-import           GHC.Types (Word (W#))
-import qualified GHC.Integer.Simple.Internals as I
-#endif
 import           GHC.Real (Ratio(..))
 import           GHC.TypeLits
 import           Instances.TH.Lift ()
@@ -143,13 +136,19 @@ import           TH.Derive
 #if MIN_VERSION_time(1,8,0)
 import qualified Data.Time.Clock.System as Time
 #endif
-
 #if MIN_VERSION_time(1,9,0)
 import qualified Data.Time.Format.ISO8601 as Time
 #endif
-
 #if MIN_VERSION_time(1,11,0)
 import qualified Data.Time.Calendar.Quarter as Time
+#endif
+
+#ifdef INTEGER_GMP
+import qualified GHC.Integer.GMP.Internals as I
+import           GHC.Types (Int (I#))
+#else
+import           GHC.Types (Word (W#))
+import qualified GHC.Integer.Simple.Internals as I
 #endif
 
 -- Conditional import to avoid warning

@@ -23,6 +23,7 @@ import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Short as SBS
 import           Data.Complex (Complex(..))
 import           Data.Containers (mapFromList, setFromList)
+import           Data.Fixed (Pico)
 import           Data.Generics (listify)
 import           Data.HashMap.Strict (HashMap)
 import           Data.HashSet (HashSet)
@@ -33,9 +34,6 @@ import           Data.IntSet (IntSet)
 import qualified Data.List.NonEmpty as NE
 import           Data.Map (Map)
 import           Data.Monoid
-#if !MIN_VERSION_primitive(0,7,0)
-import           Data.Primitive.Types (Addr)
-#endif
 import           Data.Proxy (Proxy(..))
 import           Data.Sequence (Seq)
 import           Data.Sequences (fromList)
@@ -49,6 +47,7 @@ import           Data.StoreSpec.TH
 import           Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Time as Time
+import qualified Data.Time.Clock.TAI as Time
 import           Data.Typeable (Typeable)
 import qualified Data.Vector as V
 import qualified Data.Vector.Primitive as PV
@@ -71,6 +70,20 @@ import           System.Posix.Types
 import           Test.Hspec hiding (runIO)
 import           Test.SmallCheck.Series
 import           TH.Utilities (unAppsT)
+
+#if !MIN_VERSION_primitive(0,7,0)
+import           Data.Primitive.Types (Addr)
+#endif
+
+#if MIN_VERSION_time(1,8,0)
+import qualified Data.Time.Clock.System as Time
+#endif
+#if MIN_VERSION_time(1,9,0)
+import qualified Data.Time.Format.ISO8601 as Time
+#endif
+#if MIN_VERSION_time(1,11,0)
+import qualified Data.Time.Calendar.Quarter as Time
+#endif
 
 #if !MIN_VERSION_smallcheck(1,2,0)
 import           Data.Void (Void)
@@ -227,6 +240,9 @@ instance Monad m => Serial m Time.Day where
 instance Monad m => Serial m Time.DiffTime where
     series = Time.picosecondsToDiffTime <$> series
 
+instance Monad m => Serial m Time.NominalDiffTime where
+    series = (realToFrac :: Integer -> Time.NominalDiffTime) <$> series
+
 instance Monad m => Serial m Time.UTCTime where
     series = uncurry Time.UTCTime <$> (series >< series)
 
@@ -302,7 +318,34 @@ spec = do
 #if MIN_VERSION_base(4,10,0)
                  , [t| CTimer |]
 #endif
-                 , [t| TimeSpec |]
+
+-- Assume the TH generated instances for Time work, to avoid defining
+-- Serial instances. Also some lack Show / Eq.
+
+                 , [t| Time.AbsoluteTime |]
+                 , [t| Time.Day |]
+                 , [t| Time.LocalTime |]
+                 , [t| Time.TimeOfDay |]
+                 , [t| Time.TimeZone |]
+                 , [t| Time.UTCTime |]
+                 , [t| Time.UniversalTime |]
+                 , [t| Time.ZonedTime |]
+                 , [t| Time.TimeLocale |]
+#if MIN_VERSION_time(1,8,0)
+                 , [t| Time.SystemTime |]
+#endif
+#if MIN_VERSION_time(1,9,0)
+                 , [t| Time.FormatExtension |]
+                 , [t| Time.CalendarDiffDays |]
+                 , [t| Time.CalendarDiffTime |]
+#endif
+#if MIN_VERSION_time(1,11,0)
+                 , [t| Time.DayOfWeek |]
+                 , [t| Time.FirstWeekType |]
+                 , [t| Time.Quarter |]
+                 , [t| Time.QuarterOfYear |]
+#endif
+
                  ]
              omitTys <- (omitTys0 ++) <$> mapM (\ty -> [t| PV.Vector $(pure ty) |]) omitTys0
              let f ty = isMonoType ty && ty `notElem` omitTys && null (listify isThName ty)
