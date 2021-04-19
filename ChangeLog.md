@@ -1,5 +1,9 @@
 # ChangeLog
 
+## 0.7.11
+
+* Fixes testsuite compilation with `network >= 3.1.2`. See [#159][].
+
 ## 0.7.10
 
 * Adds `Store` instances for all serializable datatypes exported by
