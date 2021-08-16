@@ -1,6 +1,6 @@
 # ChangeLog
 
-## Unreleased
+## 0.7.12
 
 * Build with ghc-9.0.1
 
