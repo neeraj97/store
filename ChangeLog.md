@@ -1,5 +1,14 @@
 # ChangeLog
 
+## 0.7.13
+
+* Fix build with `time >= 1.11`. See [#162][].
+
+* Adds missing `liftTyped` method for `Lift TypeHash`. See [#163][].
+
+[#162]: https://github.com/mgsloan/store/issues/162
+[#163]: https://github.com/mgsloan/store/issues/163
+
 ## 0.7.12
 
 * Build with ghc-9.0.1
