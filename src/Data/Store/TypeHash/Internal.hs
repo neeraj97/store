@@ -28,7 +28,7 @@ import           Data.Typeable (Typeable)
 import           GHC.Generics (Generic)
 import           Language.Haskell.TH
 import           Language.Haskell.TH.ReifyMany (reifyMany)
-import           Language.Haskell.TH.Syntax (Lift(lift))
+import           Language.Haskell.TH.Syntax (Lift(..), unsafeTExpCoerce)
 import           Prelude
 
 {-# DEPRECATED mkManyHasTypeHash, mkHasTypeHash
@@ -63,6 +63,9 @@ instance NFData TypeHash
 
 instance Lift TypeHash where
     lift = staticByteStringExp . unStaticSize . unTypeHash
+#if MIN_VERSION_template_haskell(2,16,0)
+    liftTyped = Code . unsafeTExpCoerce . lift
+#endif
 
 reifyManyTyDecls :: ((Name, Info) -> Q (Bool, [Name]))
                  -> [Name]
