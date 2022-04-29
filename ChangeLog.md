@@ -1,5 +1,12 @@
 # ChangeLog
 
+## 0.7.15
+
+* Adds support for `text >= 2`. See [#170][].
+
+[#170]: https://github.com/mgsloan/store/issues/170
+
+
 ## 0.7.14
 
 * Fixes build with ghc-8.10 (broken in last release due to differences
