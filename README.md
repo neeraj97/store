@@ -59,6 +59,11 @@ builtin set of instances have some gotchas to be aware of:
   to store all the elements. Malicious or malformed input could cause
   allocation of large amounts of memory.  See [issue #122][].
 
+* Serialization may vary based on the version of datatypes. For
+  example, `Text` serialized from `text < 2` will not be compatible
+  with `Text` from `text >= 2`, because the internal representation
+  switched from UTF-16 to UTF-8.
+
 [issue #122]: https://github.com/fpco/store/issues/122
 
 ## Blog posts
