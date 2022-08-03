@@ -1,5 +1,12 @@
 # ChangeLog
 
+## 0.7.16
+
+* Adds support for `vector-0.13.0.0`. See [#174][].
+
+[#174]: https://github.com/mgsloan/store/issues/174
+
+
 ## 0.7.15
 
 * Adds support for `text >= 2`. See [#170][].
