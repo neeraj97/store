@@ -29,7 +29,7 @@ import           Data.Generics.Aliases (extT, mkQ, extQ)
 import           Data.Generics.Schemes (listify, everywhere, something)
 import           Data.List (find)
 import qualified Data.Map as M
-import           Data.Maybe (fromMaybe, isJust)
+import           Data.Maybe (fromMaybe, isJust, mapMaybe)
 import           Data.Primitive.ByteArray
 import           Data.Primitive.Types
 import           Data.Store.Core
@@ -374,27 +374,35 @@ deriveManyStoreUnboxVector = do
 getUnboxInfo :: Q [(Cxt, Type, [DataCon])]
 getUnboxInfo = do
     FamilyI _ insts <- reify ''UV.Vector
-    return (map (everywhere (id `extT` dequalVarT) . go) insts)
+    return (map (everywhere (id `extT` dequalVarT)) $ mapMaybe go insts)
   where
 #if MIN_VERSION_template_haskell(2,15,0)
     go (NewtypeInstD preds _ lhs _ con _)
       | [_, ty] <- unAppsT lhs
-      = (preds, ty, conToDataCons con)
+      = toResult preds ty [con]
     go (DataInstD preds _ lhs _ cons _)
       | [_, ty] <- unAppsT lhs
-      = (preds, ty, concatMap conToDataCons cons)
+      = toResult preds ty cons
 #elif MIN_VERSION_template_haskell(2,11,0)
-    go (NewtypeInstD preds _ [ty] _ con _) = (preds, ty, conToDataCons con)
-    go (DataInstD preds _ [ty] _ cons _) = (preds, ty, concatMap conToDataCons cons)
+    go (NewtypeInstD preds _ [ty] _ con _) = toResult preds ty [con]
+    go (DataInstD preds _ [ty] _ cons _) = toResult preds ty cons
 #else
-    go (NewtypeInstD preds _ [ty] con _) = (preds, ty, conToDataCons con)
-    go (DataInstD preds _ [ty] cons _) = (preds, ty, concatMap conToDataCons cons)
+    go (NewtypeInstD preds _ [ty] con _) = toResult preds ty [con]
+    go (DataInstD preds _ [ty] cons _) = toResult preds ty cons
 #endif
     go x = error ("Unexpected result from reifying Unboxed Vector instances: " ++ pprint x)
+    toResult :: Cxt -> Type -> [Con] -> Maybe (Cxt, Type, [DataCon])
+    toResult _ _ [NormalC conName _]
+      | nameBase conName `elem` skippedUnboxConstructors = Nothing
+    toResult preds ty cons
+      = Just (preds, ty, concatMap conToDataCons cons)
     dequalVarT :: Type -> Type
     dequalVarT (VarT n) = VarT (dequalify n)
     dequalVarT ty = ty
 
+-- See issue #174
+skippedUnboxConstructors :: [String]
+skippedUnboxConstructors = ["MV_UnboxAs", "V_UnboxAs", "MV_UnboxViaPrim", "V_UnboxViaPrim"]
 
 ------------------------------------------------------------------------
 -- Utilities
