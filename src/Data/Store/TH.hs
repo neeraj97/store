@@ -30,7 +30,7 @@
 -- The instances generated via generics always use 'VarSize' for sum
 -- types.
 module Data.Store.TH
-    ( makeStore
+    ( makeStore, makeJStore, makeDataType, makeDataTypeDeriving
     -- * Testing Store instances
     , smallcheckManyStore
     , checkRoundtrip
@@ -48,6 +48,9 @@ import Test.Hspec
 import Test.Hspec.SmallCheck (property)
 import Test.SmallCheck
 import Data.Store.TH.Internal (makeStore)
+import Data.Store.TH.JInternal (makeJStore, makeDataType, makeDataTypeDeriving)
+import Data.Aeson (Value(..), Object)
+import Data.Scientific (Scientific)
 
 ------------------------------------------------------------------------
 -- Testing
@@ -80,3 +83,6 @@ smallcheckMany = doE . map (\f -> f >>= \(name, expr) -> noBindS [e| it name $ $
 verboseTrace :: Show a => Bool -> String -> a -> a
 verboseTrace True msg x = trace (show (msg, x)) x
 verboseTrace False _ x = x
+
+$(makeStore ''Scientific)
+$(makeStore ''Value)
