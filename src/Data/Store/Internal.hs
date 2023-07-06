@@ -106,6 +106,7 @@ import           Data.Store.Impl
 import           Data.Store.Core
 import           Data.Store.TH.Internal
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as T
 import qualified Data.Text.Array as TA
 import qualified Data.Text.Foreign as T
 import qualified Data.Text.Internal as T
@@ -458,15 +459,11 @@ instance Store T.Text where
 #else
     size = VarSize $ \x ->
         sizeOf (undefined :: Int) +
-        2 * (T.lengthWord16 x)
-    poke x = do
-        let !(T.Text (TA.Array array) w16Off w16Len) = x
-        poke w16Len
-        pokeFromByteArray array (2 * w16Off) (2 * w16Len)
+        BS.length (T.encodeUtf8 x)
+    poke x = poke (T.encodeUtf8 x)
     peek = do
-        w16Len <- peek
-        ByteArray array <- peekToByteArray "Data.Text.Text" (2 * w16Len)
-        return (T.Text (TA.Array array) 0 w16Len)
+        bs <- peek
+        return $ T.decodeUtf8 bs
 #endif
 
 ------------------------------------------------------------------------
