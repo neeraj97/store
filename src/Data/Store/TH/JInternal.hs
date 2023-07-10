@@ -10,7 +10,7 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
 module Data.Store.TH.JInternal
-    (makeJStore,makeDataType, makeDataTypeDeriving
+    (makeJStore,makeDataType, makeDataTypeDeriving, makeJStoreIdentity
     ) where
 
 import           Control.Applicative
@@ -61,13 +61,21 @@ import           Data.List
 requiredSuffix :: String
 requiredSuffix = "TH"
 
+makeJStoreIdentity :: Name -> Q [Dec]
+makeJStoreIdentity  = makeJStoreInternal True
+
 makeJStore :: Name -> Q [Dec]
-makeJStore name = do
+makeJStore = makeJStoreInternal False
+
+makeJStoreInternal ::  Bool -> Name -> Q [Dec]
+makeJStoreInternal higherKindIdentity name = do
     dt <- reifyDataType name
     newName <- getNameSuffixRemoved name requiredSuffix
-    let preds = map (storePred . VarT) (dtTvs dt)
-        argTy = appsT (ConT newName) (map VarT (dtTvs dt))
-    (:[]) <$> deriveStore preds argTy (dtCons dt)
+    let preds = []
+        argTy = if higherKindIdentity 
+                    then AppT (ConT newName) (ConT $ mkName "Identity")
+                    else ConT newName
+    (:[]) <$> deriveStore preds argTy (dtCons dt) higherKindIdentity
 
 getNameSuffixRemoved :: Name -> String -> Q Name
 getNameSuffixRemoved name suffix
@@ -111,8 +119,8 @@ notDeprecated (AppT ty ((AppT (ConT con) _))) = (not (nameBase con == "Deprecate
 notDeprecated (AppT (ConT con) _) = not (nameBase con == "Deprecated")
 notDeprecated _ = True
 
-deriveStore :: Cxt -> Type -> [DataCon] -> Q Dec
-deriveStore preds headTy cons0 =
+deriveStore :: Cxt -> Type -> [DataCon] -> Bool -> Q Dec
+deriveStore preds headTy cons0 higherKindIdentity =
     makeStoreInstance preds headTy
         <$> sizeExpr
         <*> peekExpr
@@ -133,7 +141,7 @@ deriveStore preds headTy cons0 =
     (tagType, _, tagSize) =
         fromMaybe (error "Too many constructors") $
         find (\(_, maxN, _) -> maxN >= length cons) tagTypes
-    tagTypes :: [(Name, Int, Int)]
+    tagTypes :: [(Name, Int, Int)] -- correct this logic
     tagTypes =
         [ ('(), 1, 0)
         , (''Word8, fromIntegral (maxBound :: Word8), 1)
@@ -147,46 +155,15 @@ deriveStore preds headTy cons0 =
     sizeNames = zipWith (\_ -> mkName . ("sz" ++) . show) cons ints
     tagName = mkName "tag"
     valName = mkName "val"
-    sizeExpr
-        -- Maximum size of GHC tuples
-        | length cons <= 62 =
-            caseE (tupE (concatMap (map sizeAtType . snd) cons))
-                  (case cons of
-                     -- Avoid overlapping matches when the case expression is ()
-                     [] -> [matchConstSize]
-                     [c] | null (snd c) -> [matchConstSize]
-                     _ -> [matchConstSize, matchVarSize])
-        | otherwise = varSizeExpr
+    sizeExpr = varSizeExpr
       where
         sizeAtType :: (Name, Type, Int) -> ExpQ
-        sizeAtType (_, ty, _) = [| size :: Size $(return ty) |]
-        matchConstSize :: MatchQ
-        matchConstSize = do
-            let sz0 = VarE (mkName "sz0")
-                sizeDecls =
-                    if null sizeNames
-                        then [valD (varP (mkName "sz0")) (normalB [| 0 |]) []]
-                        else zipWith constSizeDec sizeNames cons
-            sameSizeExpr <-
-                case sizeNames of
-                    (_ : tailSizeNames) ->
-                        foldl (\l r -> [| $(l) && $(r) |]) [| True |] $
-                        map (\szn -> [| $(return sz0) == $(varE szn) |]) tailSizeNames
-                    [] -> [| True |]
-            result <- [| ConstSize (tagSize + $(return sz0)) |]
-            match (tupP (map (\(n, _, _) -> conP 'ConstSize [varP n])
-                             (concatMap snd cons)))
-                  (guardedB [return (NormalG sameSizeExpr, result)])
-                  sizeDecls
-        constSizeDec :: Name -> (Name, [(Name, Type, Int)]) -> DecQ
-        constSizeDec szn (_, []) =
-            valD (varP szn) (normalB [| 0 |]) []
-        constSizeDec szn (_, fields) =
-            valD (varP szn) body []
-          where
-            body = normalB $
-                foldl (\l r -> [| $(l) + $(r) |]) [|0|] $
-                map (\(sizeName, _, i) -> [| $(varE sizeName) + 4 + (getSize (i :: Int)) |]) fields
+        sizeAtType (_, ty, _) = 
+            if higherKindIdentity 
+                then case ty of 
+                        AppT (AppT (ConT x) (VarT y)) ty'  -> if nameBase x == "C" then [| size :: Size $(return ty') |] else fail $ "Not in form1 of B.C f"
+                        _               -> fail $ show ty
+                else [| size :: Size $(return ty) |]
         matchVarSize :: MatchQ
         matchVarSize = do
             match (tupP (map (\(n, _, _) -> varP n) (concatMap snd cons)))
@@ -194,31 +171,32 @@ deriveStore preds headTy cons0 =
                   []
         varSizeExpr :: ExpQ
         varSizeExpr =
-            [| VarSize $ \x -> tagSize + $(caseE [| x |] (map matchVar cons)) |]
+            [| VarSize $ \x -> $(caseE [| x |] (map matchVar cons)) |]
         matchVar :: (Name, [(Name, Type, Int)]) -> MatchQ
-        matchVar (cname, []) =
-            match (conP cname []) (normalB [| 0 |]) []
+        matchVar (cname, []) = 
+            let consSize = getSize $ T.pack $ nameBase cname in 
+            match (conP cname []) (normalB  $ [| consSize |]) []
         matchVar (cname, fields) =
             match (conP cname (zipWith (\_ fn -> varP fn) fields fNames))
                   body
                   []
           where
-            body = normalB $
-                foldl (\l r -> [| $(l) + $(r)|]) [|0|]
-                (zipWith (\(sizeName, ty, i) fn -> if isMaybeType ty then [| getSizeOfMaybe $(varE fn) i |] else [| getSizeWith $(varE sizeName) $(varE fn) + 4 + (getSize (i :: Int)) |])
+            body = let consSize = getSize $ T.pack $ nameBase cname in  normalB $ 
+                foldl (\l r -> [| $(l) + $(r)|]) [|consSize|]
+                (zipWith (\(sizeName, ty, i) fn -> if isMaybeType ty then [| getSizeOfMaybe $(varE fn) i |] else [| getSize $(varE fn) + 4 + (getSize (i :: Int)) |])
                          fields
                          fNames)
     -- Choose a tag size large enough for this constructor count.
     -- Expression used for the definition of peek.
     peekExpr = case cons of
         [] -> [| error ("Attempting to peek type with no constructors (" ++ $(lift (show headTy)) ++ ")") |]
-        [con] -> peekCon con
+        -- [con] -> peekCon con
         _ -> doE
             [ bindS (varP tagName) [| peek |]
-            , noBindS (caseE (sigE (varE tagName) (conT tagType))
-                      (map peekMatch (zip [0..] cons) ++ [peekErr]))
+            , noBindS (caseE (sigE (varE tagName) (conT ''T.Text))
+                      (map peekMatch cons ++ [peekErr]))
             ]
-    peekMatch (ix, con) = match (litP (IntegerL ix)) (normalB (peekCon con)) []
+    peekMatch con = match (litP (StringL (nameBase (fst con)))) (normalB (peekCon con)) []
     peekErr = match wildP (normalB
         [| peekException $ T.pack $ "Found invalid tag while peeking (" ++ $(lift (show headTy)) ++ ")" |]) []
     peekCon (cname, fields) =
@@ -229,16 +207,13 @@ deriveStore preds headTy cons0 =
                     map (\(fn, ty, i) -> bindS [p|PeekResult $(varP ptr) $(varP fn)|] (if isMaybeType ty then [| runPeek (peekyMaybe i endPtr peek) end $(varE ptr) |] else [| runPeek (peeky i endPtr peek) end $(varE ptr) |])) fields ++
                     [noBindS $ appE (varE 'return) $ appE (appE (conE 'PeekResult) (varE 'endPtr)) $ appsE $ conE cname : map (\(fn, _, _) -> varE fn) fields])
                     |]
-    pokeExpr = lamE [varP valName] $ caseE (varE valName) $ zipWith pokeCon [0..] cons
-    pokeCon :: Int -> (Name, [(Name, Type, Int)]) -> MatchQ
-    pokeCon ix (cname, fields) =
+    pokeExpr = lamE [varP valName] $ caseE (varE valName) $ map pokeCon cons
+    pokeCon :: (Name, [(Name, Type, Int)]) -> MatchQ
+    pokeCon (cname, fields) =
         match (conP cname (map (\(fn, _, _) -> varP fn) fields)) body []
       where
-        body = normalB $
-            case cons of
-                (_:_:_) -> doE (pokeTag ix : map pokeField fields)
-                _ -> doE (map pokeField fields)
-    pokeTag ix = noBindS [| poke (ix :: $(conT tagType)) |]
+        body = normalB $ doE (pokeTag (nameBase cname) : map pokeField fields)
+    pokeTag ix = noBindS [| poke (ix :: $(conT ''T.Text)) |]
     pokeField (fn, ty, i) =  if isMaybeType ty then  noBindS [| pokeyMaybe i $(varE fn) |] else noBindS [| pokey i $(varE fn) |]
     ptr = mkName "ptr"
 
@@ -389,38 +364,6 @@ deriveManyStorePrimVector = do
 
 primSizeOfExpr :: Type -> ExpQ
 primSizeOfExpr ty = [| $(varE 'sizeOf#) (error "sizeOf# evaluated its argument" :: $(return ty)) |]
-
-deriveManyStoreUnboxVector :: Q [Dec]
-deriveManyStoreUnboxVector = do
-    unboxes <- getUnboxInfo
-    stores <- postprocess . instancesMap <$> getInstances ''Store
-    unboxInstances <- postprocess . instancesMap <$> getInstances ''UV.Unbox
-    let dataFamilyDecls =
-            M.fromList (map (\(preds, ty, cons) -> ([AppT (ConT ''UV.Vector) ty], (preds, cons))) unboxes)
-            `M.difference`
-            stores
-#if MIN_VERSION_template_haskell(2,10,0)
-        substituteConstraint (AppT (ConT n) arg)
-          | n == ''UV.Unbox = AppT (ConT ''Store) (AppT (ConT ''UV.Vector) arg)
-#else
-        substituteConstraint (ClassP n [arg])
-          | n == ''UV.Unbox = ClassP ''Store [AppT (ConT ''UV.Vector) arg]
-#endif
-        substituteConstraint x = x
-    -- TODO: ideally this would use a variant of 'deriveStore' which
-    -- assumes VarSize.
-    forM (M.toList dataFamilyDecls) $ \case
-        ([ty], (_, cons)) -> do
-            let headTy = getTyHead (unAppsT ty !! 1)
-            (preds, ty') <- case M.lookup [headTy] unboxInstances of
-              Nothing -> do
-                reportWarning $ "No Unbox instance found for " ++ pprint headTy
-                return ([], ty)
-              Just (TypeclassInstance cs (AppT _ ty') _) ->
-                return (map substituteConstraint cs, AppT (ConT ''UV.Vector) ty')
-              Just _ -> fail "Impossible case"
-            deriveStore preds ty' cons
-        _ -> fail "impossible case in deriveManyStoreUnboxVector"
 
 -- TODO: Add something for this purpose to TH.ReifyDataType
 
