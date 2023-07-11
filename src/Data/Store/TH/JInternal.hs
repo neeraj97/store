@@ -62,20 +62,20 @@ requiredSuffix :: String
 requiredSuffix = "TH"
 
 makeJStoreIdentity :: Name -> Q [Dec]
-makeJStoreIdentity  = makeJStoreInternal True
+makeJStoreIdentity  = makeJStoreInternal $ Just $ mkName "Identity"
 
 makeJStore :: Name -> Q [Dec]
-makeJStore = makeJStoreInternal False
+makeJStore = makeJStoreInternal Nothing
 
-makeJStoreInternal ::  Bool -> Name -> Q [Dec]
-makeJStoreInternal higherKindIdentity name = do
+makeJStoreInternal ::  Maybe Name -> Name -> Q [Dec]
+makeJStoreInternal higherKind name = do
     dt <- reifyDataType name
     newName <- getNameSuffixRemoved name requiredSuffix
     let preds = []
-        argTy = if higherKindIdentity 
-                    then AppT (ConT newName) (ConT $ mkName "Identity")
-                    else ConT newName
-    (:[]) <$> deriveStore preds argTy (dtCons dt) higherKindIdentity
+        argTy = case higherKind of
+                    Just v -> AppT (ConT newName) (ConT v)
+                    Nothing -> ConT newName
+    (:[]) <$> deriveStore preds argTy (dtCons dt)
 
 getNameSuffixRemoved :: Name -> String -> Q Name
 getNameSuffixRemoved name suffix
@@ -119,8 +119,8 @@ notDeprecated (AppT ty ((AppT (ConT con) _))) = (not (nameBase con == "Deprecate
 notDeprecated (AppT (ConT con) _) = not (nameBase con == "Deprecated")
 notDeprecated _ = True
 
-deriveStore :: Cxt -> Type -> [DataCon] -> Bool -> Q Dec
-deriveStore preds headTy cons0 higherKindIdentity =
+deriveStore :: Cxt -> Type -> [DataCon] -> Q Dec
+deriveStore preds headTy cons0 =
     makeStoreInstance preds headTy
         <$> sizeExpr
         <*> peekExpr
@@ -138,17 +138,6 @@ deriveStore preds headTy cons0 higherKindIdentity =
       ]
     --   (ty,i) <- zipWith (\(_,ty) i -> (ty,i)) (dcFields dc) ([0..] :: [Int]), notDeprecated ty
     -- NOTE: tag code duplicated in th-storable.
-    (tagType, _, tagSize) =
-        fromMaybe (error "Too many constructors") $
-        find (\(_, maxN, _) -> maxN >= length cons) tagTypes
-    tagTypes :: [(Name, Int, Int)] -- correct this logic
-    tagTypes =
-        [ ('(), 1, 0)
-        , (''Word8, fromIntegral (maxBound :: Word8), 1)
-        , (''Word16, fromIntegral (maxBound :: Word16), 2)
-        , (''Word32, fromIntegral (maxBound :: Word32), 4)
-        , (''Word64, fromIntegral (maxBound :: Word64), 8)
-        ]
     fName ix = mkName ("f" ++ show ix)
     ints = [0..] :: [Int]
     fNames = map fName ints
@@ -157,13 +146,6 @@ deriveStore preds headTy cons0 higherKindIdentity =
     valName = mkName "val"
     sizeExpr = varSizeExpr
       where
-        sizeAtType :: (Name, Type, Int) -> ExpQ
-        sizeAtType (_, ty, _) = 
-            if higherKindIdentity 
-                then case ty of 
-                        AppT (AppT (ConT x) (VarT y)) ty'  -> if nameBase x == "C" then [| size :: Size $(return ty') |] else fail $ "Not in form1 of B.C f"
-                        _               -> fail $ show ty
-                else [| size :: Size $(return ty) |]
         matchVarSize :: MatchQ
         matchVarSize = do
             match (tupP (map (\(n, _, _) -> varP n) (concatMap snd cons)))
