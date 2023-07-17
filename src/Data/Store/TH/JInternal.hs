@@ -10,7 +10,7 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
 module Data.Store.TH.JInternal
-    (makeJStore,makeDataType, makeDataTypeDeriving, makeJStoreIdentity
+    (makeJStore, makeJStoreIdentity
     ) where
 
 import           Control.Applicative
@@ -19,7 +19,7 @@ import           Data.Generics.Aliases (extT, mkQ, extQ)
 import           Data.Generics.Schemes (listify, everywhere, something)
 import           Data.List (find)
 import qualified Data.Map as M
-import           Data.Maybe (fromMaybe, isJust, mapMaybe)
+import           Data.Maybe (fromMaybe, isJust, mapMaybe, fromJust)
 import           Data.Primitive.ByteArray
 import           Data.Primitive.Types
 import           Data.Store.Core
@@ -46,6 +46,10 @@ import           Control.Exception (Exception(..), throwIO, try)
 import           Foreign.Ptr
 import           Data.Store.Internal
 import           Data.List
+import qualified Data.ByteString.Char8 as BSC
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Internal as BS
+import qualified Data.Digest.XXHash as XXHash
 
 -- instance Deriver (Store a) where
 --     runDeriver _ preds ty = do
@@ -58,8 +62,6 @@ import           Data.List
 --
 -- Note that when used with datatypes that require type variables, the
 -- ScopedTypeVariables extension is required.
-requiredSuffix :: String
-requiredSuffix = "TH"
 
 makeJStoreIdentity :: Name -> Q [Dec]
 makeJStoreIdentity  = makeJStoreInternal $ Just $ mkName "Identity"
@@ -70,104 +72,72 @@ makeJStore = makeJStoreInternal Nothing
 makeJStoreInternal ::  Maybe Name -> Name -> Q [Dec]
 makeJStoreInternal higherKind name = do
     dt <- reifyDataType name
-    newName <- getNameSuffixRemoved name requiredSuffix
     let preds = []
         argTy = case higherKind of
-                    Just v -> AppT (ConT newName) (ConT v)
-                    Nothing -> ConT newName
+                    Just v -> AppT (ConT name) (ConT v)
+                    Nothing -> ConT name
     (:[]) <$> deriveStore preds argTy (dtCons dt)
 
-getNameSuffixRemoved :: Name -> String -> Q Name
-getNameSuffixRemoved name suffix
-    | let dtName = nameBase name, isSuffixOf suffix dtName = fromMaybe name <$> lookupTypeName (take (length dtName - length suffix) dtName)
-    | otherwise = return $ name
+calculateFieldNameHash :: Maybe Name -> Word32
+calculateFieldNameHash name = calculateHash $ nameBase $ fromJust name
 
-makeDataTypeDeriving :: Name -> [String] -> Q [Dec]
-makeDataTypeDeriving name dcs = do
-    info <- reify name
-    case info of
-       TyConI (DataD ctx dtName tyVBs mkind ((RecC recName varBangTypes):[]) _) -> do 
-           return $ (DataD ctx (removeSuffix dtName requiredSuffix) tyVBs mkind ((RecC (removeSuffix recName requiredSuffix) (removeDeprecated varBangTypes)):[]) [DerivClause Nothing (map (ConT . mkName) dcs)]):[]
-       _                                                -> return []
-    where 
-        removeDeprecated varBangTypes = [(nm,bg,ty) | (nm,bg,ty) <- varBangTypes, notDeprecated ty]
+calculateHash :: String -> Word32
+calculateHash = XXHash.xxHash' . BSC.pack
 
-makeDataType :: Name -> Q [Dec]
-makeDataType name = do
-    info <- reify name
-    case info of
-       TyConI (DataD ctx dtName tyVBs mkind ((RecC recName varBangTypes):[]) dcs) -> do 
-           return $ (DataD ctx (removeSuffix dtName requiredSuffix) tyVBs mkind ((RecC (removeSuffix recName requiredSuffix) (removeDeprecated varBangTypes)):[]) dcs):[]
-       _                                                -> return []
-    where 
-        removeDeprecated varBangTypes = [(nm,bg,ty) | (nm,bg,ty) <- varBangTypes, notDeprecated ty]
-
-
-
-getDeriveEqShow :: [DerivClause]
-getDeriveEqShow = [DerivClause Nothing [ConT $ mkName "Generic",ConT $ mkName "B.Beamable"]] -- ConT $ mkName "Eq",ConT $ mkName "Show",ConT $ mkName "ToJSON",ConT $ mkName "FromJSON"
-
-removeSuffix :: Name -> String -> Name
-removeSuffix name1 suffix
-    | let nameStr = nameBase name1, isSuffixOf suffix nameStr = mkName $ take (length nameStr - length suffix) nameStr
-    | otherwise = name1
-
-notDeprecated :: Type -> Bool
-notDeprecated (AppT ty ((AppT (ConT con) _))) = (not (nameBase con == "Deprecated")) && (case ty of
-                                                                                          ConT con2 ->  not (nameBase con2 == "Deprecated")
-                                                                                          _         ->  True)
-notDeprecated (AppT (ConT con) _) = not (nameBase con == "Deprecated")
-notDeprecated _ = True
+getCollisions :: [(Name, [(Name, Type)],[(Name, Type, Word32)])] -> [(String, [[String]])]
+getCollisions cons = foldl' (\ans (cname,_,fields) -> 
+                                case collidingFields fields of 
+                                    [] -> ans
+                                    el -> (nameBase cname,el):ans) [] cons
+    where
+        collidingFields :: [(Name, Type, Word32)] -> [[String]]
+        collidingFields [] = []
+        collidingFields ((f0,_,hash0):xs) = filter (\arr -> length arr > 1) $ fst $
+                                            foldl' (\(prevArr:ans,prevHash) (fn,_,hashn) -> if hashn == prevHash then ((nameBase fn:prevArr):ans,hashn) else ([nameBase fn]:prevArr:ans,hashn)
+                                                 ) ([[nameBase f0]],hash0) xs
 
 deriveStore :: Cxt -> Type -> [DataCon] -> Q Dec
 deriveStore preds headTy cons0 =
-    makeStoreInstance preds headTy
-        <$> sizeExpr
-        <*> peekExpr
-        <*> pokeExpr
+    case getCollisions cons of 
+        []  ->  makeStoreInstance preds headTy
+                    <$> sizeExpr
+                    <*> peekExpr
+                    <*> pokeExpr
+        arr ->  fail $ "Collision detected for the following fields " ++ show arr
   where
-    cons :: [(Name, [(Name, Type, Int)])]
+    cons :: [(Name, [(Name, Type)],[(Name, Type, Word32)])] -- [(constructorName,[array of fieldNames and types],[array of fieldNames sorted on their hash])]
     cons =
-      [ ( removeSuffix (dcName dc) requiredSuffix
-        , [ (mkName ("c" ++ show ixc ++ "f" ++ show ixf), ty, ixf)
-          | (ty,ixf) <- zipWith (\(_,ty) i -> (ty,i)) (dcFields dc) ints, notDeprecated ty
+      [ (dcName dc
+        , [ (mkName $ nameBase $ fromJust fn, ty)
+          | (fn,ty) <- dcFields dc
+          ]
+          -- sorted order fields based on hash
+        , [ (mkName $ nameBase $ fromJust fn, ty, hash)
+          | (fn,ty,hash) <- sortOn (\(_,_,hash)->hash) $ map (\(fn,ty) -> (fn, ty, calculateFieldNameHash fn)) (dcFields dc)
           ]
         )
-      | ixc <- ints
       | dc <- cons0
       ]
-    --   (ty,i) <- zipWith (\(_,ty) i -> (ty,i)) (dcFields dc) ([0..] :: [Int]), notDeprecated ty
-    -- NOTE: tag code duplicated in th-storable.
-    fName ix = mkName ("f" ++ show ix)
-    ints = [0..] :: [Int]
-    fNames = map fName ints
-    sizeNames = zipWith (\_ -> mkName . ("sz" ++) . show) cons ints
     tagName = mkName "tag"
     valName = mkName "val"
     sizeExpr = varSizeExpr
       where
-        matchVarSize :: MatchQ
-        matchVarSize = do
-            match (tupP (map (\(n, _, _) -> varP n) (concatMap snd cons)))
-                  (normalB varSizeExpr)
-                  []
         varSizeExpr :: ExpQ
         varSizeExpr =
             [| VarSize $ \x -> $(caseE [| x |] (map matchVar cons)) |]
-        matchVar :: (Name, [(Name, Type, Int)]) -> MatchQ
-        matchVar (cname, []) = 
+        matchVar :: (Name, [(Name, Type)],[(Name, Type, Word32)]) -> MatchQ
+        matchVar (cname, [],_) = 
             let consSize = getSize $ T.pack $ nameBase cname in 
             match (conP cname []) (normalB  $ [| consSize |]) []
-        matchVar (cname, fields) =
-            match (conP cname (zipWith (\_ fn -> varP fn) fields fNames))
+        matchVar (cname, fields, sortedFields) =
+            match (conP cname (map (\(fn,_) -> varP fn) fields))
                   body
                   []
           where
             body = let consSize = getSize $ T.pack $ nameBase cname in  normalB $ 
                 foldl (\l r -> [| $(l) + $(r)|]) [|consSize|]
-                (zipWith (\(sizeName, ty, i) fn -> if isMaybeType ty then [| getSizeOfMaybe $(varE fn) i |] else [| getSize $(varE fn) + 4 + (getSize (i :: Int)) |])
-                         fields
-                         fNames)
+                (map (\(fn, ty,i) -> if isMaybeType ty then [| getSizeOfMaybe $(varE fn) |] else [| getSize $(varE fn) + 8 |])
+                         sortedFields)
     -- Choose a tag size large enough for this constructor count.
     -- Expression used for the definition of peek.
     peekExpr = case cons of
@@ -178,23 +148,23 @@ deriveStore preds headTy cons0 =
             , noBindS (caseE (sigE (varE tagName) (conT ''T.Text))
                       (map peekMatch cons ++ [peekErr]))
             ]
-    peekMatch con = match (litP (StringL (nameBase (fst con)))) (normalB (peekCon con)) []
+    peekMatch con@(cname,_,_) = match (litP (StringL (nameBase cname))) (normalB (peekCon con)) []
     peekErr = match wildP (normalB
         [| peekException $ T.pack $ "Found invalid tag while peeking (" ++ $(lift (show headTy)) ++ ")" |]) []
-    peekCon (cname, fields) =
+    peekCon (cname, fields, sortedFields) =
         case fields of
             [] -> [| pure $(conE cname) |]
             _ -> [| Peek $ \end $(varP ptr) -> let endPtr = peekStateEndPtr end in $(doE $
                     -- [letS [ ValD (VarP (mkName "endPtr")) (normalB (peekStateEndPtr end))]] ++
-                    map (\(fn, ty, i) -> bindS [p|PeekResult $(varP ptr) $(varP fn)|] (if isMaybeType ty then [| runPeek (peekyMaybe i endPtr peek) end $(varE ptr) |] else [| runPeek (peeky i endPtr peek) end $(varE ptr) |])) fields ++
-                    [noBindS $ appE (varE 'return) $ appE (appE (conE 'PeekResult) (varE 'endPtr)) $ appsE $ conE cname : map (\(fn, _, _) -> varE fn) fields])
+                    map (\(fn, ty, i) -> bindS [p|PeekResult $(varP ptr) $(varP fn)|] (if isMaybeType ty then [| runPeek (peekyMaybe i endPtr peek) end $(varE ptr) |] else [| runPeek (peeky i endPtr peek) end $(varE ptr) |])) sortedFields ++
+                    [noBindS $ appE (varE 'return) $ appE (appE (conE 'PeekResult) (varE 'endPtr)) $ appsE $ conE cname : map (\(fn, _) -> varE fn) fields])
                     |]
     pokeExpr = lamE [varP valName] $ caseE (varE valName) $ map pokeCon cons
-    pokeCon :: (Name, [(Name, Type, Int)]) -> MatchQ
-    pokeCon (cname, fields) =
-        match (conP cname (map (\(fn, _, _) -> varP fn) fields)) body []
+    pokeCon :: (Name, [(Name, Type)],[(Name, Type, Word32)]) -> MatchQ
+    pokeCon (cname, fields, sortedFields) =
+        match (conP cname (map (\(fn, _) -> varP fn) fields)) body []
       where
-        body = normalB $ doE (pokeTag (nameBase cname) : map pokeField fields)
+        body = normalB $ doE (pokeTag (nameBase cname) : map pokeField sortedFields)
     pokeTag ix = noBindS [| poke (ix :: $(conT ''T.Text)) |]
     pokeField (fn, ty, i) =  if isMaybeType ty then  noBindS [| pokeyMaybe i $(varE fn) |] else noBindS [| pokey i $(varE fn) |]
     ptr = mkName "ptr"
@@ -279,120 +249,6 @@ deriveGenericInstanceFromName n = do
     return $ deriveGenericInstance (map storePred tvs) (appsT (ConT n) tvs)
 
 ------------------------------------------------------------------------
--- Storable
-
--- TODO: Generate inline pragmas? Probably not necessary
-
-deriveManyStoreFromStorable :: (Type -> Bool) -> Q [Dec]
-deriveManyStoreFromStorable p = do
-    storables <- postprocess . instancesMap <$> getInstances ''Storable
-    stores <- postprocess . instancesMap <$> getInstances ''Store
-    return $ M.elems $ flip M.mapMaybe (storables `M.difference` stores) $
-        \(TypeclassInstance cs ty _) ->
-        let argTy = head (tail (unAppsT ty))
-            tyNameLit = LitE (StringL (pprint ty)) in
-        if p argTy && not (superclassHasStorable cs)
-            then Just $ makeStoreInstance cs argTy
-                (AppE (VarE 'sizeStorableTy) tyNameLit)
-                (AppE (VarE 'peekStorableTy) tyNameLit)
-                (VarE 'pokeStorable)
-            else Nothing
-
--- See #143. Often Storable superclass constraints should instead be
--- Store constraints, so instead it just warns for these.
-superclassHasStorable :: Cxt -> Bool
-superclassHasStorable = isJust . something (mkQ Nothing justStorable `extQ` ignoreStrings)
-  where
-    justStorable :: Type -> Maybe ()
-    justStorable (ConT n) | n == ''Storable = Just ()
-    justStorable _ = Nothing
-    ignoreStrings :: String -> Maybe ()
-    ignoreStrings _ = Nothing
-
-------------------------------------------------------------------------
--- Vector
-
-deriveManyStorePrimVector :: Q [Dec]
-deriveManyStorePrimVector = do
-    prims <- postprocess . instancesMap <$> getInstances ''PV.Prim
-    stores <- postprocess . instancesMap <$> getInstances ''Store
-    let primInsts =
-            M.mapKeys (map (AppT (ConT ''PV.Vector))) prims
-            `M.difference`
-            stores
-    forM (M.toList primInsts) $ \primInst -> case primInst of
-        ([_], TypeclassInstance cs ty _) -> do
-            let argTy = head (tail (unAppsT ty))
-            sizeExpr <- [|
-                VarSize $ \x ->
-                    I# $(primSizeOfExpr (ConT ''Int)) +
-                    I# $(primSizeOfExpr argTy) * PV.length x
-                |]
-            peekExpr <- [| do
-                len <- peek
-                let sz = I# $(primSizeOfExpr argTy)
-                array <- peekToByteArray $(lift ("Primitive Vector (" ++ pprint argTy ++ ")"))
-                                         (len * sz)
-                return (PV.Vector 0 len array)
-                |]
-            pokeExpr <- [| \(PV.Vector offset len (ByteArray array)) -> do
-                let sz = I# $(primSizeOfExpr argTy)
-                poke len
-                pokeFromByteArray array (offset * sz) (len * sz)
-                |]
-            return $ makeStoreInstance cs (AppT (ConT ''PV.Vector) argTy) sizeExpr peekExpr pokeExpr
-        _ -> fail "Invariant violated in derivemanyStorePrimVector"
-
-
-primSizeOfExpr :: Type -> ExpQ
-primSizeOfExpr ty = [| $(varE 'sizeOf#) (error "sizeOf# evaluated its argument" :: $(return ty)) |]
-
--- TODO: Add something for this purpose to TH.ReifyDataType
-
-getUnboxInfo :: Q [(Cxt, Type, [DataCon])]
-getUnboxInfo = do
-    FamilyI _ insts <- reify ''UV.Vector
-    return (map (everywhere (id `extT` dequalVarT)) $ mapMaybe go insts)
-  where
-#if MIN_VERSION_template_haskell(2,15,0)
-    go (NewtypeInstD preds _ lhs _ con _)
-      | [_, ty] <- unAppsT lhs
-      = toResult preds ty [con]
-    go (DataInstD preds _ lhs _ cons _)
-      | [_, ty] <- unAppsT lhs
-      = toResult preds ty cons
-#elif MIN_VERSION_template_haskell(2,11,0)
-    go (NewtypeInstD preds _ [ty] _ con _) = toResult preds ty [con]
-    go (DataInstD preds _ [ty] _ cons _) = toResult preds ty cons
-#else
-    go (NewtypeInstD preds _ [ty] con _) = toResult preds ty [con]
-    go (DataInstD preds _ [ty] cons _) = toResult preds ty cons
-#endif
-    go x = error ("Unexpected result from reifying Unboxed Vector instances: " ++ pprint x)
-    toResult :: Cxt -> Type -> [Con] -> Maybe (Cxt, Type, [DataCon])
-    toResult _ _ [NormalC conName _]
-      | nameBase conName `elem` skippedUnboxConstructors = Nothing
-    toResult preds ty cons
-      = Just (preds, ty, concatMap conToDataCons cons)
-    dequalVarT :: Type -> Type
-    dequalVarT (VarT n) = VarT (dequalify n)
-    dequalVarT ty = ty
-
--- See issue #174
-skippedUnboxConstructors :: [String]
-skippedUnboxConstructors = ["MV_UnboxAs", "V_UnboxAs", "MV_UnboxViaPrim", "V_UnboxViaPrim"]
-
-------------------------------------------------------------------------
--- Utilities
-
--- Filters out overlapping instances and instances with more than one
--- type arg (should be impossible).
-postprocess :: M.Map [Type] [a] -> M.Map [Type] a
-postprocess =
-    M.mapMaybeWithKey $ \tys xs ->
-        case (tys, xs) of
-            ([_ty], [x]) -> Just x
-            _ -> Nothing
 
 makeStoreInstance :: Cxt -> Type -> Exp -> Exp -> Exp -> Dec
 makeStoreInstance cs ty sizeExpr peekExpr pokeExpr =
@@ -461,8 +317,9 @@ peeky tagNum endPtr m = do
         when (ptr >= endPtr) $ 
             throwIO $ PeekException 0 "error"
         PeekResult ptr1 (currentTagNum :: Word32) <- runPeek (peek) end ptr
-        PeekResult ptr2 (size :: Int) <- runPeek (peek) end ptr1
-        let endPtr' = ptr2 `plusPtr` size
+        PeekResult ptr2 (size' :: Word32) <- runPeek (peek) end ptr1
+        let size = fromIntegral size'
+            endPtr' = ptr2 `plusPtr` size
         if tagNum == currentTagNum
             then do
                 result <- decodeIOWithFromPtr (isolate size m) ptr2 size
@@ -484,8 +341,9 @@ peekyMaybe tagNum endPtr m = do
             then return $ PeekResult ptr Nothing
             else do
                 PeekResult ptr1 (currentTagNum :: Word32) <- runPeek (peek) end ptr
-                PeekResult ptr2 (size :: Int) <- runPeek (peek) end ptr1
-                let endPtr' = ptr2 `plusPtr` size
+                PeekResult ptr2 (size' :: Word32) <- runPeek (peek) end ptr1
+                let size = fromIntegral size'
+                    endPtr' = ptr2 `plusPtr` size
                 if (tagNum == currentTagNum)
                     then do
                         result <- decodeIOWithFromPtr (isolate size m) ptr2 size
@@ -499,27 +357,23 @@ peekyMaybe tagNum endPtr m = do
 -- optimise fromIntegral conversions
 {-# INLINE pokeyMaybe #-}
 pokeyMaybe :: Store a => Word32 -> Maybe a -> Poke ()
-pokeyMaybe tagNum (Just val) = poke tagNum >> poke (getSize val) >> poke val
+pokeyMaybe tagNum (Just val) = poke tagNum >> poke ((fromIntegral (getSize val)) :: Word32) >> poke val
 pokeyMaybe tagNum Nothing    = Poke $ \_ptr offset -> pure (offset, ())
 
 -- optimise fromIntegral conversions
 {-# INLINE pokey #-}
 pokey :: Store a => Word32 -> a -> Poke ()
-pokey tagNum val = poke tagNum >> poke (getSize val) >> poke val
+pokey tagNum val = poke tagNum >> poke ((fromIntegral (getSize val)) :: Word32) >> poke val
 
 {-# INLINE getSizeOfMaybe #-}
-getSizeOfMaybe :: Store a => (Maybe a) -> Int -> Int
-getSizeOfMaybe (Just val) tagNum = getSize val + 4 + getSize tagNum
-getSizeOfMaybe Nothing _         = 0
+getSizeOfMaybe :: Store a => (Maybe a) -> Int
+getSizeOfMaybe (Just val) = getSize val + 8
+getSizeOfMaybe Nothing    = 0
 
---  Peek $ \end ptr -> do
---     runPeek (do
---         a <- peeky 1 end peek
---         b <- peeky 2 end peek
---         c <- peeky 3 end peek
---         d <- peeky 4 end peek
---         e <- peeky 5 end peek
---         f <- peeky 6 end peek
-
---     ) end ptr
-
+-- this copies data of bytestring into buffer
+{-# INLINE pokePlainByteString #-}
+pokePlainByteString :: BS.ByteString -> Poke ()
+pokePlainByteString x = do
+    let (sourceFp, sourceOffset, sourceLength) = BS.toForeignPtr x
+    -- poke sourceLength -- this where this differs from poke impl of BS.Bystring
+    pokeFromForeignPtr sourceFp sourceOffset sourceLength

@@ -30,7 +30,7 @@
 -- The instances generated via generics always use 'VarSize' for sum
 -- types.
 module Data.Store.TH
-    ( makeStore, makeJStore, makeDataType, makeDataTypeDeriving, makeJStoreIdentity
+    ( makeStore, makeJStore, makeJStoreIdentity
     -- * Testing Store instances
     , smallcheckManyStore
     , checkRoundtrip
@@ -48,7 +48,7 @@ import Test.Hspec
 import Test.Hspec.SmallCheck (property)
 import Test.SmallCheck
 import Data.Store.TH.Internal (makeStore)
-import Data.Store.TH.JInternal (makeJStore, makeDataType, makeDataTypeDeriving, makeJStoreIdentity)
+import Data.Store.TH.JInternal (makeJStore, makeJStoreIdentity)
 import Data.Aeson (Value(..), Object)
 import Data.Scientific (Scientific)
 
