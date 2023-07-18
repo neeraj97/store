@@ -50,6 +50,7 @@ import qualified Data.ByteString.Char8 as BSC
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Internal as BS
 import qualified Data.Digest.XXHash as XXHash
+import           Foreign.ForeignPtr
 
 -- instance Deriver (Store a) where
 --     runDeriver _ preds ty = do
@@ -98,22 +99,23 @@ getCollisions cons = foldl' (\ans (cname,_,fields) ->
 
 deriveStore :: Cxt -> Type -> [DataCon] -> Q Dec
 deriveStore preds headTy cons0 =
-    case getCollisions cons of 
-        []  ->  makeStoreInstance preds headTy
+        makeStoreInstance preds headTy
                     <$> sizeExpr
                     <*> peekExpr
                     <*> pokeExpr
-        arr ->  fail $ "Collision detected for the following fields " ++ show arr
   where
-    cons :: [(Name, [(Name, Type)],[(Name, Type, Word32)])] -- [(constructorName,[array of fieldNames and types],[array of fieldNames sorted on their hash])]
+    cons :: [(Name, [(Name, Type)],[(Name, Type, Word8, BS.ByteString)])] -- [(constructorName,[array of fieldNames and types],[array of fieldNames])]
     cons =
       [ (dcName dc
         , [ (mkName $ nameBase $ fromJust fn, ty)
           | (fn,ty) <- dcFields dc
           ]
           -- sorted order fields based on hash
-        , [ (mkName $ nameBase $ fromJust fn, ty, hash)
-          | (fn,ty,hash) <- sortOn (\(_,_,hash)->hash) $ map (\(fn,ty) -> (fn, ty, calculateFieldNameHash fn)) (dcFields dc)
+        , [ (mkName fn, ty, fromIntegral fnsize,fbs)
+          | (fn,ty,fnsize,fbs) <- sortBy (\(f1,_,_,_) (f2,_,_,_)-> let cmp = compare (length f1) (length f2) in if cmp == EQ then compare f1 f2 else cmp) 
+                                                            $ map (\(mfn,ty) -> let fn = fromJust mfn
+                                                                                    bs = BSC.pack $ nameBase fn 
+                                                                                in (nameBase fn,ty,BS.length bs,bs)) (dcFields dc)
           ]
         )
       | dc <- cons0
@@ -125,7 +127,7 @@ deriveStore preds headTy cons0 =
         varSizeExpr :: ExpQ
         varSizeExpr =
             [| VarSize $ \x -> $(caseE [| x |] (map matchVar cons)) |]
-        matchVar :: (Name, [(Name, Type)],[(Name, Type, Word32)]) -> MatchQ
+        matchVar :: (Name, [(Name, Type)],[(Name, Type, Word8, BS.ByteString)]) -> MatchQ
         matchVar (cname, [],_) = 
             let consSize = getSize $ T.pack $ nameBase cname in 
             match (conP cname []) (normalB  $ [| consSize |]) []
@@ -136,7 +138,7 @@ deriveStore preds headTy cons0 =
           where
             body = let consSize = getSize $ T.pack $ nameBase cname in  normalB $ 
                 foldl (\l r -> [| $(l) + $(r)|]) [|consSize|]
-                (map (\(fn, ty,i) -> if isMaybeType ty then [| getSizeOfMaybe $(varE fn) |] else [| getSize $(varE fn) + 8 |])
+                (map (\(fn, ty, fnsize,_) -> let fnsizeInt ::Int = fromIntegral fnsize in (if isMaybeType ty then [| getSizeOfMaybe $(varE fn) fnsizeInt|] else [| getSize $(varE fn) + 5 + fnsize|]))
                          sortedFields)
     -- Choose a tag size large enough for this constructor count.
     -- Expression used for the definition of peek.
@@ -156,17 +158,17 @@ deriveStore preds headTy cons0 =
             [] -> [| pure $(conE cname) |]
             _ -> [| Peek $ \end $(varP ptr) -> let endPtr = peekStateEndPtr end in $(doE $
                     -- [letS [ ValD (VarP (mkName "endPtr")) (normalB (peekStateEndPtr end))]] ++
-                    map (\(fn, ty, i) -> bindS [p|PeekResult $(varP ptr) $(varP fn)|] (if isMaybeType ty then [| runPeek (peekyMaybe i endPtr peek) end $(varE ptr) |] else [| runPeek (peeky i endPtr peek) end $(varE ptr) |])) sortedFields ++
+                    map (\(fn, ty, fnsize,fbs) -> bindS [p|PeekResult $(varP ptr) $(varP fn)|] (if isMaybeType ty then [| runPeek (peekyMaybe fbs endPtr peek) end $(varE ptr) |] else [| runPeek (peeky fbs endPtr peek) end $(varE ptr) |])) sortedFields ++
                     [noBindS $ appE (varE 'return) $ appE (appE (conE 'PeekResult) (varE 'endPtr)) $ appsE $ conE cname : map (\(fn, _) -> varE fn) fields])
                     |]
     pokeExpr = lamE [varP valName] $ caseE (varE valName) $ map pokeCon cons
-    pokeCon :: (Name, [(Name, Type)],[(Name, Type, Word32)]) -> MatchQ
+    pokeCon :: (Name, [(Name, Type)],[(Name, Type, Word8, BS.ByteString)]) -> MatchQ
     pokeCon (cname, fields, sortedFields) =
         match (conP cname (map (\(fn, _) -> varP fn) fields)) body []
       where
         body = normalB $ doE (pokeTag (nameBase cname) : map pokeField sortedFields)
     pokeTag ix = noBindS [| poke (ix :: $(conT ''T.Text)) |]
-    pokeField (fn, ty, i) =  if isMaybeType ty then  noBindS [| pokeyMaybe i $(varE fn) |] else noBindS [| pokey i $(varE fn) |]
+    pokeField (fn, ty, fsize, fbs) =  if isMaybeType ty then  noBindS [| pokeyMaybe fsize fbs $(varE fn) |] else noBindS [| pokey fsize fbs $(varE fn) |]
     ptr = mkName "ptr"
 
 isMaybeType :: Type -> Bool
@@ -308,31 +310,35 @@ storePred ty =
 #endif
 
 {-# INLINE peeky #-}
-peeky :: Word32 -> Ptr Word8 -> Peek a -> Peek a
-peeky tagNum endPtr m = do
+peeky :: BS.ByteString -> Ptr Word8 -> Peek a -> Peek a
+peeky fnbs endPtr m = do
     -- (currentTagNum :: Word32) <- peek
     -- (size :: Int) <- peek
     Peek $ \end ptr -> do
         -- print $ show ptr <> " " <> show endPtr <> " " <> show tagNum 
         when (ptr >= endPtr) $ 
             throwIO $ PeekException 0 "error"
-        PeekResult ptr1 (currentTagNum :: Word32) <- runPeek (peek) end ptr
-        PeekResult ptr2 (size' :: Word32) <- runPeek (peek) end ptr1
+        PeekResult ptr1 (fnSize' :: Word8) <- runPeek (peek) end ptr
+        let (bsPtr,_,len) = BS.toForeignPtr fnbs
+            fnSize = fromIntegral fnSize'
+            sizeCmp = len - fnSize
+        PeekResult ptr2 (size' :: Word32) <- runPeek (peek) end (ptr1 `plusPtr` fnSize)
+        memcomp <- if sizeCmp == 0 then withForeignPtr bsPtr (\ptr -> BS.memcmp ptr ptr1 len) else return (fromIntegral sizeCmp)
         let size = fromIntegral size'
             endPtr' = ptr2 `plusPtr` size
-        if tagNum == currentTagNum
+        if memcomp == 0
             then do
                 result <- decodeIOWithFromPtr (isolate size m) ptr2 size
                 return $ PeekResult endPtr' result
-            else if tagNum > currentTagNum
+            else if memcomp > 0
                 then do
                     PeekResult ptr' _ <- runPeek (skip size) end ptr2 
-                    runPeek (peeky tagNum endPtr m) end ptr'
+                    runPeek (peeky fnbs endPtr m) end ptr'
                 else throwIO $ PeekException 0 "error"
 
 {-# INLINE peekyMaybe #-}
-peekyMaybe :: Word32 -> Ptr Word8 -> Peek a -> Peek (Maybe a)
-peekyMaybe tagNum endPtr m = do
+peekyMaybe :: BS.ByteString -> Ptr Word8 -> Peek a -> Peek (Maybe a)
+peekyMaybe fnbs endPtr m = do
     -- (currentTagNum :: Word32) <- peek
     -- (size :: Int) <- peek
     Peek $ \end ptr -> do
@@ -340,40 +346,44 @@ peekyMaybe tagNum endPtr m = do
         if (ptr >= endPtr) 
             then return $ PeekResult ptr Nothing
             else do
-                PeekResult ptr1 (currentTagNum :: Word32) <- runPeek (peek) end ptr
-                PeekResult ptr2 (size' :: Word32) <- runPeek (peek) end ptr1
+                PeekResult ptr1 (fnSize' :: Word8) <- runPeek (peek) end ptr
+                let (bsPtr,_,len) = BS.toForeignPtr fnbs
+                    fnSize = fromIntegral fnSize'
+                    sizeCmp = len - fnSize
+                PeekResult ptr2 (size' :: Word32) <- runPeek (peek) end (ptr1 `plusPtr` fnSize)
+                memcomp <- if sizeCmp == 0 then withForeignPtr bsPtr (\ptr -> BS.memcmp ptr ptr1 len) else return (fromIntegral sizeCmp)
                 let size = fromIntegral size'
                     endPtr' = ptr2 `plusPtr` size
-                if (tagNum == currentTagNum)
+                if memcomp == 0
                     then do
                         result <- decodeIOWithFromPtr (isolate size m) ptr2 size
                         return $ PeekResult endPtr' (Just result)
-                    else if tagNum > currentTagNum
+                    else if memcomp > 0
                         then do
                             PeekResult ptr' _ <- runPeek (skip size) end ptr2
-                            runPeek (peekyMaybe tagNum endPtr m) end ptr'
+                            runPeek (peekyMaybe fnbs endPtr m) end ptr'
                         else return $ PeekResult ptr Nothing
 
 -- optimise fromIntegral conversions
 {-# INLINE pokeyMaybe #-}
-pokeyMaybe :: Store a => Word32 -> Maybe a -> Poke ()
-pokeyMaybe tagNum (Just val) = poke tagNum >> poke ((fromIntegral (getSize val)) :: Word32) >> poke val
-pokeyMaybe tagNum Nothing    = Poke $ \_ptr offset -> pure (offset, ())
+pokeyMaybe :: Store a => Word8 -> BS.ByteString -> Maybe a -> Poke ()
+pokeyMaybe fieldNameSize fieldName (Just val) = poke fieldNameSize >> pokeRawByteString fieldName >> poke ((fromIntegral (getSize val)) :: Word32) >> poke val
+pokeyMaybe _ _ Nothing    = Poke $ \_ptr offset -> pure (offset, ())
 
 -- optimise fromIntegral conversions
 {-# INLINE pokey #-}
-pokey :: Store a => Word32 -> a -> Poke ()
-pokey tagNum val = poke tagNum >> poke ((fromIntegral (getSize val)) :: Word32) >> poke val
+pokey :: Store a => Word8 -> BS.ByteString -> a -> Poke ()
+pokey fieldNameSize fieldName val = poke fieldNameSize >> pokeRawByteString fieldName >> poke ((fromIntegral (getSize val)) :: Word32) >> poke val
 
 {-# INLINE getSizeOfMaybe #-}
-getSizeOfMaybe :: Store a => (Maybe a) -> Int
-getSizeOfMaybe (Just val) = getSize val + 8
-getSizeOfMaybe Nothing    = 0
+getSizeOfMaybe :: Store a => (Maybe a) -> Int -> Int
+getSizeOfMaybe (Just val) fnSize = getSize val + 5 + fnSize
+getSizeOfMaybe Nothing   _ = 0
 
 -- this copies data of bytestring into buffer
-{-# INLINE pokePlainByteString #-}
-pokePlainByteString :: BS.ByteString -> Poke ()
-pokePlainByteString x = do
+{-# INLINE pokeRawByteString #-}
+pokeRawByteString :: BS.ByteString -> Poke ()
+pokeRawByteString x = do
     let (sourceFp, sourceOffset, sourceLength) = BS.toForeignPtr x
     -- poke sourceLength -- this where this differs from poke impl of BS.Bystring
     pokeFromForeignPtr sourceFp sourceOffset sourceLength
