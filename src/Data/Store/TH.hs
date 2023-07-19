@@ -30,7 +30,7 @@
 -- The instances generated via generics always use 'VarSize' for sum
 -- types.
 module Data.Store.TH
-    ( makeStore, makeJStore, makeJStoreIdentity
+    ( makeJStore, makeJStoreIdentity
     -- * Testing Store instances
     , smallcheckManyStore
     , checkRoundtrip
