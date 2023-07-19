@@ -233,22 +233,6 @@ instance Store Bar where
 -}
 
 ------------------------------------------------------------------------
--- Generic
-
-deriveTupleStoreInstance :: Int -> Dec
-deriveTupleStoreInstance n =
-    deriveGenericInstance (map storePred tvs)
-                          (foldl1 AppT (TupleT n : tvs))
-  where
-    tvs = take n (map (VarT . mkName . (:[])) ['a'..'z'])
-
-deriveGenericInstance :: Cxt -> Type -> Dec
-deriveGenericInstance cs ty = plainInstanceD cs (AppT (ConT ''Store) ty) []
-
-deriveGenericInstanceFromName :: Name -> Q Dec
-deriveGenericInstanceFromName n = do
-    tvs <- map VarT . dtTvs <$> reifyDataType n
-    return $ deriveGenericInstance (map storePred tvs) (appsT (ConT n) tvs)
 
 ------------------------------------------------------------------------
 
@@ -261,53 +245,6 @@ makeStoreInstance cs ty sizeExpr peekExpr pokeExpr =
         , ValD (VarP 'peek) (NormalB peekExpr) []
         , ValD (VarP 'poke) (NormalB pokeExpr) []
         ]
-
--- TODO: either generate random types that satisfy instances with
--- variables in them, or have a check that there's at least a manual
--- check for polymorphic instances.
-
-getAllInstanceTypes :: Name -> Q [[Type]]
-getAllInstanceTypes n =
-    map (\(TypeclassInstance _ ty _) -> drop 1 (unAppsT ty)) <$>
-    getInstances n
-
-getAllInstanceTypes1 :: Name -> Q [Type]
-getAllInstanceTypes1 n =
-    fmap (fmap (fromMaybe (error "getAllMonoInstances1 expected only one type argument") . headMay))
-         (getAllInstanceTypes n)
-
-isMonoType :: Type -> Bool
-isMonoType = null . listify isVarT
-
-isVarT :: Type -> Bool
-isVarT VarT{} = True
-isVarT _ = False
-
--- TOOD: move these to th-reify-many
-
--- | Get a map from the 'getTyHead' type of instances to
--- 'TypeclassInstance'.
-instancesMap :: [TypeclassInstance] -> M.Map [Type] [TypeclassInstance]
-instancesMap =
-    M.fromListWith (++) .
-    map (\ti -> (map getTyHead (instanceArgTypes ti), [ti]))
-
-instanceArgTypes :: TypeclassInstance -> [Type]
-instanceArgTypes (TypeclassInstance _ ty _) = drop 1 (unAppsT ty)
-
-getTyHead :: Type -> Type
-getTyHead (SigT x _) = getTyHead x
-getTyHead (ForallT _ _ x) = getTyHead x
-getTyHead (AppT l _) = getTyHead l
-getTyHead x = x
-
-storePred :: Type -> Pred
-storePred ty =
-#if MIN_VERSION_template_haskell(2,10,0)
-        AppT (ConT ''Store) ty
-#else
-        ClassP ''Store [ty]
-#endif
 
 {-# INLINE peeky #-}
 peeky :: BS.ByteString -> Ptr Word8 -> Peek a -> Peek a
