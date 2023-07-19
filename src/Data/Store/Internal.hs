@@ -459,11 +459,15 @@ instance Store T.Text where
 #else
     size = VarSize $ \x ->
         sizeOf (undefined :: Int) +
-        BS.length (T.encodeUtf8 x)
-    poke x = poke (T.encodeUtf8 x)
+        2 * (T.lengthWord16 x)
+    poke x = do
+        let !(T.Text (TA.Array array) w16Off w16Len) = x
+        poke w16Len
+        pokeFromByteArray array (2 * w16Off) (2 * w16Len)
     peek = do
-        bs <- peek
-        return $ T.decodeUtf8 bs
+        w16Len <- peek
+        ByteArray array <- peekToByteArray "Data.Text.Text" (2 * w16Len)
+        return (T.Text (TA.Array array) 0 w16Len)
 #endif
 
 ------------------------------------------------------------------------
