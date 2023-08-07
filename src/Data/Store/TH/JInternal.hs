@@ -49,7 +49,6 @@ import           Data.List
 import qualified Data.ByteString.Char8 as BSC
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Internal as BS
-import qualified Data.Digest.XXHash as XXHash
 import           Foreign.ForeignPtr
 
 -- instance Deriver (Store a) where
@@ -79,11 +78,6 @@ makeJStoreInternal higherKind name = do
                     Nothing -> ConT name
     (:[]) <$> deriveStore preds argTy (dtCons dt)
 
-calculateFieldNameHash :: Maybe Name -> Word32
-calculateFieldNameHash name = calculateHash $ nameBase $ fromJust name
-
-calculateHash :: String -> Word32
-calculateHash = XXHash.xxHash' . BSC.pack
 
 getCollisions :: [(Name, [(Name, Type)],[(Name, Type, Word32)])] -> [(String, [[String]])]
 getCollisions cons = foldl' (\ans (cname,_,fields) -> 

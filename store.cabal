@@ -105,7 +105,6 @@ library
     , unordered-containers >=0.2.5.1
     , vector >=0.10.12.3
     , void >=0.5.11
-    , xxhash >=0.0.2
   default-language: Haskell2010
   if flag(integer-simple)
     build-depends:
@@ -178,7 +177,6 @@ test-suite store-test
     , unordered-containers >=0.2.5.1
     , vector >=0.10.12.3
     , void >=0.5.11
-    , xxhash >=0.0.2
   default-language: Haskell2010
   if flag(integer-simple)
     build-depends:
@@ -246,7 +244,6 @@ benchmark store-bench
     , unordered-containers >=0.2.5.1
     , vector >=0.10.12.3
     , void >=0.5.11
-    , xxhash >=0.0.2
   default-language: Haskell2010
   if flag(integer-simple)
     build-depends:
@@ -325,7 +322,6 @@ benchmark store-weigh
     , vector-binary-instances
     , void >=0.5.11
     , weigh
-    , xxhash >=0.0.2
   default-language: Haskell2010
   if flag(integer-simple)
     build-depends:

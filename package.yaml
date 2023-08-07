@@ -92,7 +92,6 @@ dependencies:
   - async >=2.0.2
   - contravariant >=1.3
   - bifunctors >=4.0
-  - xxhash >=0.0.2
 when:
   # NOTE: The serialization of Integer is different when this flag is enabled.
   - condition: flag(integer-simple)
