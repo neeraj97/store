@@ -33,7 +33,7 @@ import           Foreign.Storable (Storable)
 import           GHC.Types (Int(..))
 import           Language.Haskell.TH
 import           Language.Haskell.TH.ReifyMany.Internal (TypeclassInstance(..), getInstances, unAppsT)
-import           Language.Haskell.TH.Syntax (lift, Name, OccName)
+import           Language.Haskell.TH.Syntax (lift, Name, OccName, showName)
 import           Prelude
 import           Safe (headMay)
 import           TH.Derive (Deriver(..))
@@ -71,6 +71,7 @@ makeJStore = makeJStoreInternal Nothing
 
 makeJStoreInternal ::  Maybe Name -> Name -> Q [Dec]
 makeJStoreInternal higherKind name = do
+    runIO $ print $ "making store instance for " <> showName name
     dt <- reifyDataType name
     let preds = []
         argTy = case higherKind of
