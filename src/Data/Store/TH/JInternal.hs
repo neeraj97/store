@@ -50,6 +50,7 @@ import qualified Data.ByteString.Char8 as BSC
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Internal as BS
 import           Foreign.ForeignPtr
+import qualified System.IO.Unsafe as Unsafe
 
 -- instance Deriver (Store a) where
 --     runDeriver _ preds ty = do
@@ -99,10 +100,15 @@ deriveStore preds headTy cons0 =
                     <*> peekExpr
                     <*> pokeExpr
   where
+    fromJustErr :: Name -> Maybe a -> a
+    fromJustErr _ (Just val) = val
+    fromJustErr dc val = Unsafe.unsafePerformIO $ do 
+        print $ "Errrr in for constructor" <> showName dc
+        return $ fromJust val
     cons :: [(Name, [(Name, Type)],[(Name, Type, Word8, BS.ByteString)])] -- [(constructorName,[array of fieldNames and types],[array of fieldNames])]
     cons =
       [ (dcName dc
-        , [ (mkName $ nameBase $ fromJust fn, ty)
+        , [ (mkName $ nameBase $ fromJustErr (dcName dc) fn, ty)
           | (fn,ty) <- dcFields dc
           ]
           -- sorted order fields based on hash
