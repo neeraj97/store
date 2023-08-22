@@ -51,6 +51,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Internal as BS
 import           Foreign.ForeignPtr
 import qualified System.IO.Unsafe as Unsafe
+import qualified Data.Store.TH.Internal as THInternal
 
 -- instance Deriver (Store a) where
 --     runDeriver _ preds ty = do
@@ -73,13 +74,29 @@ makeJStore = makeJStoreInternal Nothing
 makeJStoreInternal ::  Maybe Name -> Name -> Q [Dec]
 makeJStoreInternal higherKind name = do
     runIO $ print $ "making store instance for " <> showName name
-    dt <- reifyDataType name
-    let preds = []
-        argTy = case higherKind of
-                    Just v -> AppT (ConT name) (ConT v)
-                    Nothing -> ConT name
-    (:[]) <$> deriveStore preds argTy (dtCons dt)
+    check <- isNonRecordType name
+    if check 
+        then do
+            THInternal.makeStore name
+        else do
+            dt <- reifyDataType name
+            let preds = []
+                argTy = case higherKind of
+                            Just v -> AppT (ConT name) (ConT v)
+                            Nothing -> ConT name
+            (:[]) <$> deriveStore preds argTy (dtCons dt)
 
+isNonRecordType :: Name -> Q Bool
+isNonRecordType name = do
+    info <- reify name
+    return $
+        case info of
+            TyConI (DataD _ _ _ _ cons _)       -> any isNonRecordConstructor cons
+            _                                   -> True
+
+isNonRecordConstructor :: Con -> Bool
+isNonRecordConstructor (RecC _ _) = False
+isNonRecordConstructor _          = True
 
 getCollisions :: [(Name, [(Name, Type)],[(Name, Type, Word32)])] -> [(String, [[String]])]
 getCollisions cons = foldl' (\ans (cname,_,fields) -> 
