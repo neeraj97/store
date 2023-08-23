@@ -19,7 +19,7 @@ import           Data.Generics.Aliases (extT, mkQ, extQ)
 import           Data.Generics.Schemes (listify, everywhere, something)
 import           Data.List (find)
 import qualified Data.Map as M
-import           Data.Maybe (fromMaybe, isJust, mapMaybe, fromJust)
+import           Data.Maybe (fromMaybe, isJust, mapMaybe, fromJust, isNothing)
 import           Data.Primitive.ByteArray
 import           Data.Primitive.Types
 import           Data.Store.Core
@@ -75,7 +75,7 @@ makeJStoreInternal ::  Maybe Name -> Name -> Q [Dec]
 makeJStoreInternal higherKind name = do
     runIO $ print $ "making store instance for " <> showName name
     check <- isNonRecordType name
-    if check 
+    if check && isNothing higherKind
         then do
             THInternal.makeStore name
         else do
