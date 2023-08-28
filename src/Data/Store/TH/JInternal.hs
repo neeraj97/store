@@ -91,12 +91,13 @@ isNonRecordType name = do
     info <- reify name
     return $
         case info of
-            TyConI (DataD _ _ _ _ cons _)       -> any isNonRecordConstructor cons
+            TyConI (DataD _ _ _ _ cons _)       -> any isNonRecordOrNonSimpleConstructor cons
             _                                   -> True
 
-isNonRecordConstructor :: Con -> Bool
-isNonRecordConstructor (RecC _ _) = False
-isNonRecordConstructor _          = True
+isNonRecordOrNonSimpleConstructor :: Con -> Bool
+isNonRecordOrNonSimpleConstructor (RecC _ _) = False
+isNonRecordOrNonSimpleConstructor (NormalC _ []) = False
+isNonRecordOrNonSimpleConstructor _          = True
 
 getCollisions :: [(Name, [(Name, Type)],[(Name, Type, Word32)])] -> [(String, [[String]])]
 getCollisions cons = foldl' (\ans (cname,_,fields) -> 
